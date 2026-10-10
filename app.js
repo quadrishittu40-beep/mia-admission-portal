@@ -404,6 +404,123 @@ async function exportReportCsv(){
   toast('Report downloaded.');
 }
 
+function loadImageAsDataUrl(url){
+  return fetch(url)
+    .then(resp => resp.blob())
+    .then(blob => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    }));
+}
+
+function generateQrDataUrl(text, size){
+  return new Promise((resolve) => {
+    const holder = document.createElement('div');
+    holder.style.position = 'fixed';
+    holder.style.left = '-9999px';
+    document.body.appendChild(holder);
+    try{
+      new QRCode(holder, {
+        text, width: size || 240, height: size || 240,
+        correctLevel: QRCode.CorrectLevel.M,
+      });
+    }catch(e){ document.body.removeChild(holder); resolve(''); return; }
+    setTimeout(() => {
+      const canvas = holder.querySelector('canvas');
+      const dataUrl = canvas ? canvas.toDataURL('image/png') : '';
+      document.body.removeChild(holder);
+      resolve(dataUrl);
+    }, 60);
+  });
+}
+
+async function exportReportPdf(){
+  if(!S.reportRows.length){ toast('Run a report first.'); return; }
+  const btn = document.getElementById('export-pdf-btn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Preparing…'; }
+  try{
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit:'pt', format:'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+
+    const [logoDataUrl, qrDataUrl] = await Promise.all([
+      loadImageAsDataUrl('./logo.png').catch(()=>''),
+      generateQrDataUrl(location.href, 240).catch(()=>''),
+    ]);
+
+    const fromLabel = S.reportFrom ? fmtDate(S.reportFrom) : '—';
+    const toLabel = S.reportTo ? fmtDate(S.reportTo) : '—';
+    const sectionLabel = S.reportSectionId==='all' ? 'All sections' : sectionName(S.reportSectionId);
+
+    function drawHeader(){
+      doc.setFillColor(248,244,232);
+      doc.rect(0,0,pageWidth,96,'F');
+      if(logoDataUrl){ try{ doc.addImage(logoDataUrl,'PNG',40,18,58,58); }catch(e){} }
+      doc.setTextColor(27,92,66);
+      doc.setFont('helvetica','bold');
+      doc.setFontSize(16);
+      doc.text("Maknazul 'Irfan Academy", 112, 40);
+      doc.setFont('helvetica','normal');
+      doc.setFontSize(11);
+      doc.setTextColor(90,90,90);
+      doc.text('Student Attendance Report', 112, 58);
+      doc.setFontSize(9);
+      doc.text(fromLabel+' to '+toLabel+'   ·   '+sectionLabel, 112, 74);
+      doc.setDrawColor(222,210,174);
+      doc.line(40,96,pageWidth-40,96);
+    }
+
+    doc.autoTable({
+      startY: 114,
+      margin: { top:106, left:40, right:40, bottom:70 },
+      head: [['Student','Section','Present','Late','Absent','Excused','Rate']],
+      body: S.reportRows.map(r => [
+        r.student.name,
+        sectionName(r.student.sectionId),
+        String(r.present), String(r.late), String(r.absent), String(r.excused),
+        r.rate===null ? '—' : r.rate+'%',
+      ]),
+      headStyles: { fillColor:[27,92,66], textColor:255, fontStyle:'bold' },
+      alternateRowStyles: { fillColor:[248,244,232] },
+      styles: { fontSize:9, cellPadding:6, textColor:[30,38,32] },
+      didDrawPage: drawHeader,
+    });
+
+    const totalPages = doc.internal.getNumberOfPages();
+    for(let p=1; p<=totalPages; p++){
+      doc.setPage(p);
+      doc.setFontSize(8);
+      doc.setTextColor(140,140,140);
+      doc.text(
+        'Generated '+new Date().toLocaleString()+' by '+(S.staffName||'Staff')+'   ·   Page '+p+' of '+totalPages,
+        40, pageHeight-24
+      );
+    }
+
+    if(qrDataUrl){
+      doc.setPage(totalPages);
+      const qrSize = 66;
+      const qx = pageWidth-40-qrSize, qy = pageHeight-56-qrSize;
+      try{
+        doc.addImage(qrDataUrl,'PNG',qx,qy,qrSize,qrSize);
+        doc.setFontSize(7);
+        doc.setTextColor(120,120,120);
+        doc.text('Scan to open the portal', qx, qy-6);
+      }catch(e){}
+    }
+
+    doc.save('attendance-report-'+(S.reportFrom||'')+'-to-'+(S.reportTo||'')+'.pdf');
+    toast('PDF downloaded.');
+  }catch(e){
+    console.error(e);
+    toast('Could not generate the PDF. Please try again.');
+  }
+  if(btn){ btn.disabled = false; btn.textContent = 'Export PDF'; }
+}
+
 /* ============================= Parent / Guardian data ============================= */
 async function loadParentAttendance(studentId){
   const st = S.students.find(x=>x.id===studentId);
@@ -809,7 +926,10 @@ function renderReports(){
           </select>
           <button class="btn btn-ghost btn-sm" data-action="run-report">Run report</button>
         </div>
-        <button class="btn btn-gold btn-sm" data-action="export-report" ${S.reportRows.length?'':'disabled'}>Export CSV</button>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost btn-sm" data-action="export-report" ${S.reportRows.length?'':'disabled'}>Export CSV</button>
+          <button class="btn btn-gold btn-sm" id="export-pdf-btn" data-action="export-report-pdf" ${S.reportRows.length?'':'disabled'}>Export PDF</button>
+        </div>
       </div>
       <div class="tbl-wrap">
         ${S.reportLoading ? `<div class="empty">Crunching attendance…</div>` :
@@ -1228,6 +1348,7 @@ document.addEventListener('click', async (e)=>{
   else if(action==='save-attendance'){ saveAttendance(); }
   else if(action==='run-report'){ loadReport(); }
   else if(action==='export-report'){ exportReportCsv(); }
+  else if(action==='export-report-pdf'){ exportReportPdf(); }
   else if(action==='open-student-modal'){ window._modal={type:'student', data:null}; renderModal(); }
   else if(action==='edit-student'){ window._modal={type:'student', data:S.students.find(s=>s.id===el.dataset.id)}; renderModal(); }
   else if(action==='delete-student'){
