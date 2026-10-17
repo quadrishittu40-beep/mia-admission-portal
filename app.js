@@ -473,20 +473,73 @@ async function exportReportPdf(){
       doc.line(40,96,pageWidth-40,96);
     }
 
-    doc.autoTable({
-      startY: 114,
-      margin: { top:106, left:40, right:40, bottom:70 },
-      head: [['Student','Section','Present','Late','Absent','Excused','Rate']],
-      body: S.reportRows.map(r => [
-        r.student.name,
-        sectionName(r.student.sectionId),
-        String(r.present), String(r.late), String(r.absent), String(r.excused),
-        r.rate===null ? '—' : r.rate+'%',
-      ]),
-      headStyles: { fillColor:[27,92,66], textColor:255, fontStyle:'bold' },
-      alternateRowStyles: { fillColor:[248,244,232] },
-      styles: { fontSize:9, cellPadding:6, textColor:[30,38,32] },
-      didDrawPage: drawHeader,
+    // Table drawn by hand (no autoTable plugin — fewer moving parts, no
+    // version-compatibility surprises with jsPDF).
+    const headerHeight = 96;
+    const bottomMargin = 56;
+    const marginLeft = 40;
+    const cols = [
+      { key:'name',    label:'Student',  width:150, align:'left'   },
+      { key:'section', label:'Section',  width:110, align:'left'   },
+      { key:'present', label:'Present',  width:48,  align:'center' },
+      { key:'late',    label:'Late',     width:40,  align:'center' },
+      { key:'absent',  label:'Absent',   width:48,  align:'center' },
+      { key:'excused', label:'Excused',  width:55,  align:'center' },
+      { key:'rate',    label:'Rate',     width:49,  align:'center' },
+    ];
+    const tableWidth = cols.reduce((sum,c) => sum + c.width, 0);
+    const rowHeight = 22;
+    const headRowHeight = 24;
+
+    function colX(i){
+      let x = marginLeft;
+      for(let k=0; k<i; k++) x += cols[k].width;
+      return x;
+    }
+    function cellText(doc, text, col, x, y){
+      const maxChars = Math.max(3, Math.floor(col.width / 4.3));
+      let t = String(text);
+      if(t.length > maxChars) t = t.slice(0, maxChars-1) + '…';
+      const tx = col.align==='left' ? x + 6 : x + col.width/2;
+      doc.text(t, tx, y, { align: col.align==='left' ? 'left' : 'center' });
+    }
+    function drawTableHead(y){
+      doc.setFillColor(27,92,66);
+      doc.rect(marginLeft, y, tableWidth, headRowHeight, 'F');
+      doc.setTextColor(255,255,255);
+      doc.setFont('helvetica','bold');
+      doc.setFontSize(9);
+      cols.forEach((c,i) => cellText(doc, c.label, c, colX(i), y+16));
+      doc.setFont('helvetica','normal');
+      doc.setTextColor(30,38,32);
+      return y + headRowHeight;
+    }
+
+    drawHeader();
+    let y = drawTableHead(headerHeight + 18);
+
+    S.reportRows.forEach((r, idx) => {
+      if(y + rowHeight > pageHeight - bottomMargin){
+        doc.addPage();
+        drawHeader();
+        y = drawTableHead(headerHeight + 18);
+      }
+      if(idx % 2 === 1){
+        doc.setFillColor(248,244,232);
+        doc.rect(marginLeft, y, tableWidth, rowHeight, 'F');
+      }
+      doc.setFontSize(9);
+      doc.setTextColor(30,38,32);
+      const rowVals = {
+        name: r.student.name,
+        section: sectionName(r.student.sectionId),
+        present: r.present, late: r.late, absent: r.absent, excused: r.excused,
+        rate: r.rate===null ? '—' : r.rate+'%',
+      };
+      cols.forEach((c,i) => cellText(doc, rowVals[c.key], c, colX(i), y+15));
+      doc.setDrawColor(222,210,174);
+      doc.line(marginLeft, y+rowHeight, marginLeft+tableWidth, y+rowHeight);
+      y += rowHeight;
     });
 
     const totalPages = doc.internal.getNumberOfPages();
